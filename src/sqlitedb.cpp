@@ -52,7 +52,13 @@ QString escapeString(const QString& literal)
 {
     return QString::fromStdString(escapeString(literal.toStdString()));
 }
-}
+QString escapeByteArray(const QByteArray& literal)
+{
+    if(isTextOnly(literal))
+        return sqlb::escapeString(literal);
+    else
+        return QString("X'%1'").arg(QString(literal.toHex()));
+}}
 
 // collation callbacks
 int collCompare(void* /*pArg*/, int sizeA, const void* sA, int sizeB, const void* sB)
@@ -864,6 +870,7 @@ bool DBBrowserDB::dump(const QString& filePath,
     const std::vector<std::string>& tablesToDump,
     bool insertColNames,
     bool insertNewSyntx,
+    bool keepOriginal,
     bool exportSchema,
     bool exportData,
     bool keepOldSchema) const
@@ -913,11 +920,18 @@ bool DBBrowserDB::dump(const QString& filePath,
                 if(!keepOldSchema)
                     stream << QString("DROP TABLE IF EXISTS %1;\n").arg(QString::fromStdString(sqlb::escapeIdentifier(it->name())));
 
-                if(it->fullyParsed())
-                    stream << QString::fromStdString(it->sql("main", true)) << "\n";
-                else
-                    stream << QString::fromStdString(it->originalSql()) << ";\n";
+                if(it->fullyParsed() && !keepOriginal)
+                    stream << QString::fromStdString(it->sql("main", keepOldSchema)) << "\n";
+                else {
+                    QString statement = QString::fromStdString(it->originalSql());
+                    if(keepOldSchema) {
+                        // The statement is guaranteed by SQLite to start with "CREATE TABLE"
+                        const int createTableLength = 12;
+                        statement.replace(0, createTableLength, "CREATE TABLE IF NOT EXISTS");
+                    }
+                    stream << statement << ";\n";
                 }
+            }
         }
 
         // Now export the data as well
@@ -969,10 +983,7 @@ bool DBBrowserDB::dump(const QString& filePath,
                                 stream << QString("X'%1'").arg(QString(bcontent.toHex()));
                                 break;
                             case SQLITE_TEXT:
-                                if(isTextOnly(bcontent))
-                                    stream << sqlb::escapeString(bcontent);
-                                else
-                                    stream << QString("X'%1'").arg(QString(bcontent.toHex()));
+                                stream << sqlb::escapeByteArray(bcontent);
                                 break;
                             case SQLITE_NULL:
                                 stream << "NULL";
@@ -1013,7 +1024,7 @@ bool DBBrowserDB::dump(const QString& filePath,
         // Finally export all objects other than tables
         if(exportSchema)
         {
-            auto writeSchema = [&stream, &tablesToDump, keepOldSchema](const QString& type, auto objects) {
+            auto writeSchema = [&stream, &tablesToDump, keepOldSchema, keepOriginal](const QString& type, auto objects) {
                 for(const auto& obj : objects)
                 {
                     const auto& it = obj.second;
@@ -1031,8 +1042,8 @@ bool DBBrowserDB::dump(const QString& filePath,
                                       type.toUpper(),
                                       QString::fromStdString(sqlb::escapeIdentifier(it->name())));
 
-                        if(it->fullyParsed())
-                            stream << QString::fromStdString(it->sql("main", true)) << "\n";
+                        if(it->fullyParsed() && !keepOriginal)
+                            stream << QString::fromStdString(it->sql("main", keepOldSchema)) << "\n";
                         else
                             stream << QString::fromStdString(it->originalSql()) << ";\n";
                     }
@@ -1438,7 +1449,7 @@ QString DBBrowserDB::addRecord(const sqlb::ObjectIdentifier& tablename)
     }
 }
 
-bool DBBrowserDB::deleteRecords(const sqlb::ObjectIdentifier& table, const std::vector<QString>& rowids, const sqlb::StringVector& pseudo_pk)
+bool DBBrowserDB::deleteRecords(const sqlb::ObjectIdentifier& table, const std::vector<QByteArray>& rowids, const sqlb::StringVector& pseudo_pk)
 {
     if (!isOpen()) return false;
 
@@ -1452,7 +1463,7 @@ bool DBBrowserDB::deleteRecords(const sqlb::ObjectIdentifier& table, const std::
 
     // Quote all values in advance
     std::vector<std::string> quoted_rowids;
-    std::transform(rowids.begin(), rowids.end(), std::back_inserter(quoted_rowids), [](const auto& rowid) { return sqlb::escapeString((rowid.toStdString())); });
+    std::transform(rowids.begin(), rowids.end(), std::back_inserter(quoted_rowids), [](const auto& rowid) { return sqlb::escapeByteArray(rowid).toStdString(); });
 
     // For a single rowid column we can use a SELECT ... IN(...) statement which is faster.
     // For multiple rowid columns we have to use sqlb_make_single_value to decode the composed rowid values.
@@ -1480,7 +1491,7 @@ bool DBBrowserDB::deleteRecords(const sqlb::ObjectIdentifier& table, const std::
 }
 
 bool DBBrowserDB::updateRecord(const sqlb::ObjectIdentifier& table, const std::string& column,
-                               const QString& rowid, const QByteArray& value, int force_type, const sqlb::StringVector& pseudo_pk)
+                               const QByteArray& rowid, const QByteArray& value, int force_type, const sqlb::StringVector& pseudo_pk)
 {
     waitForDbRelease();
     if (!isOpen()) return false;
@@ -1497,7 +1508,7 @@ bool DBBrowserDB::updateRecord(const sqlb::ObjectIdentifier& table, const std::s
 
     // For a single rowid column we can use a simple WHERE condition, for multiple rowid columns we have to use sqlb_make_single_value to decode the composed rowid values.
     if(pks.size() == 1)
-        sql += sqlb::escapeIdentifier(pks.front()) + "=" + sqlb::escapeString(rowid.toStdString());
+      sql += sqlb::escapeIdentifier(pks.front()) + "=" + sqlb::escapeByteArray(rowid).toStdString();
     else
         sql += "sqlb_make_single_value(" + sqlb::joinStringVector(sqlb::escapeIdentifier(pks), ",") + ")=" + sqlb::escapeString(rowid.toStdString());
 
