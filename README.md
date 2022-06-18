@@ -83,7 +83,7 @@ brew install --cask db-browser-for-sqlite
 Nightly builds are available here:
 * https://nightlies.sqlitebrowser.org/latest
 
-and also you can be installed via [Homebrew Cask](https://caskroom.github.io/ "Homebrew Cask"):
+and also can be installed via [Homebrew Cask](https://caskroom.github.io/ "Homebrew Cask"):
 
     $ brew tap homebrew/cask-versions
     $ brew cask install db-browser-for-sqlite-nightly
